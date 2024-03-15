@@ -11,56 +11,85 @@ enum AlertPriority {
   final int value;
 }
 
-class Alert extends StatelessWidget {
+class Alert extends StatefulWidget {
   const Alert({
     super.key,
     required this.backgroundColor,
     required this.child,
     required this.leading,
     required this.priority,
+    required this.animationController,
   });
 
   final Color backgroundColor;
   final Widget child;
   final Widget leading;
   final AlertPriority priority;
+  final AnimationController animationController;
+
+  @override
+  State<Alert> createState() => _AlertState();
+}
+
+class _AlertState extends State<Alert> with TickerProviderStateMixin {
+  late Animation<double> _animation;
+
+  @override
+  void initState() {
+    super.initState();
+
+    /// Precisei alterar "begin: -alertHeight" para uma transiçao mais suave
+    _animation = Tween<double>(begin: -1.0, end: 1.0).animate(
+      CurvedAnimation(
+        parent: widget.animationController,
+        curve: Curves.easeInOut,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final statusbarHeight = MediaQuery.of(context).padding.top;
-    return Material(
-      child: Ink(
-        color: backgroundColor,
-        height: kAlertHeight + statusbarHeight,
-        child: Column(
-          children: [
-            SizedBox(height: statusbarHeight),
-            Expanded(
-              child: Row(
-                children: [
-                  const SizedBox(width: 28.0),
-                  IconTheme(
-                    data: const IconThemeData(
-                      color: Colors.white,
-                      size: 36,
+    return AnimatedBuilder(
+        animation: _animation,
+        builder: (context, child) {
+          return Transform.translate(
+            offset: Offset(0.0, kAlertHeight * (_animation.value - 1)),
+            child: Material(
+              child: Ink(
+                color: widget.backgroundColor,
+                height: kAlertHeight + statusbarHeight,
+                child: Column(
+                  children: [
+                    SizedBox(height: statusbarHeight),
+                    Expanded(
+                      child: Row(
+                        children: [
+                          const SizedBox(width: 28.0),
+                          IconTheme(
+                            data: const IconThemeData(
+                              color: Colors.white,
+                              size: 36,
+                            ),
+                            child: widget.leading,
+                          ),
+                          const SizedBox(width: 16.0),
+                          Expanded(
+                            child: DefaultTextStyle(
+                              style: const TextStyle(color: Colors.white),
+                              child: widget.child,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                    child: leading,
-                  ),
-                  const SizedBox(width: 16.0),
-                  Expanded(
-                    child: DefaultTextStyle(
-                      style: const TextStyle(color: Colors.white),
-                      child: child,
-                    ),
-                  ),
-                ],
+                    const SizedBox(width: 28.0),
+                  ],
+                ),
               ),
             ),
-            const SizedBox(width: 28.0),
-          ],
-        ),
-      ),
-    );
+          );
+        });
   }
 }
 
@@ -83,81 +112,74 @@ class AlertMessenger extends StatefulWidget {
       throw FlutterError.fromParts(
         [
           ErrorSummary('No AlertMessenger was found in the Element tree'),
-          ErrorDescription('AlertMessenger is required in order to show and hide alerts.'),
-          ...context.describeMissingAncestor(expectedAncestorType: AlertMessenger),
+          ErrorDescription(
+              'AlertMessenger is required in order to show and hide alerts.'),
+          ...context.describeMissingAncestor(
+              expectedAncestorType: AlertMessenger),
         ],
       );
     }
   }
 }
 
-class AlertMessengerState extends State<AlertMessenger> with TickerProviderStateMixin {
-  late final AnimationController controller;
-  late final Animation<double> animation;
-
-  Widget? alertWidget;
-
-  @override
-  void initState() {
-    super.initState();
-
-    controller = AnimationController(
-      duration: const Duration(milliseconds: 300),
-      vsync: this,
-    );
+class AlertMessengerState extends State<AlertMessenger>
+    with TickerProviderStateMixin {
+  String? get message {
+    if (alertQueue.isNotEmpty) {
+      return (alertQueue.first.child as Text).data ?? '';
+    }
+    return '';
   }
 
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final alertHeight = MediaQuery.of(context).padding.top + kAlertHeight;
-    animation = Tween<double>(begin: -alertHeight, end: 0.0).animate(
-      CurvedAnimation(parent: controller, curve: Curves.easeInOut),
-    );
+  List<Alert> alertQueue = [];
+
+  List<Alert> get priorityList =>
+      alertQueue..sort((a, b) => b.priority.value.compareTo(a.priority.value));
+
+  Future<void> showAlert({required Alert alert}) async {
+    bool containsSameColor = alertQueue.any((existingAlert) =>
+    existingAlert.backgroundColor == alert.backgroundColor);
+    if (!containsSameColor) {
+      alertQueue.add(alert);
+      await alert.animationController.forward();
+    }
   }
 
-  @override
-  void dispose() {
-    controller.dispose();
-    super.dispose();
-  }
+  Future<void> hideAlert() async {
+    if (priorityList.isNotEmpty) {
+      alertQueue = priorityList;
 
-  void showAlert({required Alert alert}) {
-    setState(() => alertWidget = alert);
-    controller.forward();
-  }
+      await alertQueue.first.animationController.reverse();
+      await alertQueue.first.animationController.forward(from: 1.0);
 
-  void hideAlert() {
-    controller.reverse();
+      alertQueue.removeAt(0);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final statusbarHeight = MediaQuery.of(context).padding.top;
-
-    return AnimatedBuilder(
-      animation: animation,
-      builder: (context, child) {
-        final position = animation.value + kAlertHeight;
-        return Stack(
-          clipBehavior: Clip.antiAliasWithSaveLayer,
-          children: [
-            Positioned.fill(
-              top: position <= statusbarHeight ? 0 : position - statusbarHeight,
-              child: _AlertMessengerScope(
-                state: this,
-                child: widget.child,
-              ),
-            ),
-            Positioned(
-              top: animation.value,
+    return Stack(
+      clipBehavior: Clip.antiAliasWithSaveLayer,
+      children: [
+        Positioned.fill(
+          top: 0,
+          child: _AlertMessengerScope(
+            state: this,
+            child: widget.child,
+          ),
+        ),
+        if (priorityList.isNotEmpty)
+          Stack(
+            children: priorityList.reversed
+                .map((e) => Positioned(
+              top: 0,
               left: 0,
               right: 0,
-              child: alertWidget ?? const SizedBox.shrink(),
-            ),
-          ],
-        );
-      },
+              child: e,
+            ))
+                .toList(),
+          ),
+      ],
     );
   }
 }
@@ -171,7 +193,8 @@ class _AlertMessengerScope extends InheritedWidget {
   final AlertMessengerState state;
 
   @override
-  bool updateShouldNotify(_AlertMessengerScope oldWidget) => state != oldWidget.state;
+  bool updateShouldNotify(_AlertMessengerScope oldWidget) =>
+      state != oldWidget.state;
 
   static _AlertMessengerScope? maybeOf(BuildContext context) {
     return context.dependOnInheritedWidgetOfExactType<_AlertMessengerScope>();
